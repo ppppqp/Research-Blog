@@ -13,5 +13,3 @@ Currently working on:
 
 - **TIL** — short notes on things I learned that day
 
-
-I'm open to new opportunites for kernel engineering and inference optimization work!
