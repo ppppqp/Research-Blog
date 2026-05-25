@@ -12,7 +12,9 @@ description: ""
 
 A blog post that connects the [TileLang paper](https://arxiv.org/abs/2504.17577) with [code](https://github.com/tile-ai/tilelang). Note that all the code pointers in this blog post is based on commit 69bc43e2cfbc38976b0c5e1c4b2299b66e8970ee.
 
+
 ## 1. Code Walkthrough
+
 Let's first take a look at the overall compilation lifecycle of TileLang.
 
 ### Capture
@@ -95,7 +97,6 @@ with T.Kernel(..., threads=thread_num):
    # block_M gets the recommendation on compilation
    A_shared = T.alloc_shared((block_M, block_K), dtype)
 ```
-
 ### Optimization
 
 After we have the IR, we do optimization and emit machine code. Compilation enters `JITKernel._compile_and_create_adapter`, opens a TVM
@@ -168,7 +169,7 @@ body, and appends every tile op or parallel loop to `infer_list_`
 ### Code Gen
 
 Finally after legalization and optimization is done, `lower` codegens device source through `device_codegen_without_compile`
-or compiled runtime modules through `device_codegen` (`tilelang/engine/lower.py:232`) to compile to machine code in various backend. CUDA uses
+or compiled runtime modules through `device_codegen` (`tilelang/engine/lower.py:232` to compile to machine code in various backend. CUDA uses
 `target.build.tilelang_cuda` or the no-compile variant
 (`tilelang/engine/lower.py:237`). Host codegen uses LLVM or TileLang C host
 codegen (`tilelang/engine/lower.py:198`). For `tvm_ffi`, the device code is
@@ -184,12 +185,76 @@ Next let's deep dive a bit to those two core contribution of TileLang:
 
 In short, tile recommendation models each operation to optimize the memory and computation placement (or in other words, optimize based on roofline model).
 
-$$Time = \max_{i,j}(\dfrac{MemoryTraffic_i}{Bandwidth_i}, \dfrac{Computation_j}{Performance_j}) + t_{intrinsic} $$
-> where i indexes memory hierarchy levels (e.g., HBM, L2, L1), j indexes compute unit types (e.g. tensor cores, CUDA cores, SFUs), and $t_intrinsic$ accounts for inherent overheads such as kernel launch latency and loop prologue/epilogue costs.
+> $$Time = \max_{i,j}(\dfrac{MemoryTraffic_i}{Bandwidth_i}, \dfrac{Computation_j}{Performance_j}) + t_{intrinsic} $$
+> where i indexes memory hierarchy levels (e.g., HBM, L2, L1), j indexes compute unit types (e.g. tensor cores, CUDA cores, SFUs), and $t_{intrinsic}$ accounts for inherent overheads such as kernel launch latency and loop prologue/epilogue costs.
 
 
 The implemented recommendation system is `tilelang/carver`. Public templates
 such as `MatmulTemplate` build an equivalent TE/TIR tensor representation, which will then be used for analysis on operation shape, reduction axes and tensorization opportunities/memory traffic.
+
+### Recommendation Data Flow
+
+The recommendation path is intentionally separate from the TileLang program
+that will eventually be compiled. A template first builds an equivalent TE/TIR
+view of the operation. Carver analyzes that view, emits `Hint` objects, and the
+caller materializes one hint back into the TileLang kernel's meta-parameters.
+
+```text
+Problem shape and dtypes
+M, N, K, transposes, heads, seq length
+        |
+        v
+Template
+MatmulTemplate / FlashAttentionTemplate
+        |
+        v
+Equivalent PrimFunc or output graph
+TE placeholders, compute, reduce axes
+        |
+        v
+Tensorization detected?
+        |
+        +-- yes --> TensorCorePolicy
+        |           MMA/WGMMA/TCGEN-aware constraints
+        |
+        +-- no  --> DefaultPolicy
+                    CUDA-core heuristic schedule
+        |
+        v
+Candidate Hint list
+        |
+        v
+User/autotuner config
+block_M, block_N, block_K, thread_num, num_stages, rasterization
+        |
+        v
+TileLang kernel source
+T.Kernel / alloc_shared / alloc_fragment / T.Pipelined
+        |
+        v
+LowerAndLegalize + OptimizeForTarget
+```
+
+For a plain GEMM, the data carried by a winning `Hint` maps almost one-to-one to
+kernel meta-parameters:
+
+```text
+Carver Hint                  TileLang kernel parameter/use
+--------------------------   ---------------------------------------------
+hint.block = [BM, BN]        block_M, block_N, output tile per CTA
+hint.rstep = [BK]            block_K, reduction slice loaded per pipeline step
+hint.warp = [WM, WN]         tensor-core warp tile shape, used to derive threads
+hint.thread = [...]          CUDA-core thread partition when not using TC
+hint.pipeline_stage          T.Pipelined(..., num_stages=...)
+hint.use_async               async-copy pipeline preference
+hint.rasterization_plan      optional blockIdx remapping for L2 locality
+hint.cached_tensors          tensors expected to reside in shared memory
+hint.pass_context            lowering knobs such as static shared merge
+```
+
+The important boundary is that Carver does not rewrite the user's kernel by
+itself. It recommends static parameters; the benchmark/autotune code then
+instantiates the TileLang program with those parameters before lowering.
 
 ### Hardware Models
 The model is heuristic, not learned. Hardware characteristics come from
@@ -232,6 +297,64 @@ def emit_config(self, topk: int) -> list[Hint]:
 def prio(td: TileDict):
     return (td.traffic + 1) * td.num_wave
 ```
+
+The candidate search can be read as a constrained best-first expansion over
+output tile sizes:
+
+```text
+Base tile
+minimum tile that reduces redundant compute
+        |
+Assign initial rstep
+coalescing/transaction heuristic
+        |
+Expand output tile factors
+DFS/PriorityQueue over factors and {2,4,8,16,32}
+        |
+Compute TileDict
+        |
+Propagate tile to producer nodes
+node.propagate_inputs / node.propagate_outputs
+        |
+Estimate global traffic
+coalesced HBM reads and writes
+        |
+Estimate shared memory
+node footprint + BestFit lifetime allocator
+        |
+Fits smem cap?
+        |
+        +-- no  --> reject
+        |
+        +-- yes --> Estimate registers
+                    2 * max(tile elems * dtype bits / 32)
+                         |
+                    Fits reg cap?
+                         |
+                         +-- no  --> reject
+                         |
+                         +-- yes --> Estimate residency
+                                     block_per_SM = min(smem, regs, sm partition)
+                                          |
+                                     Estimate waves
+                                     ceil(grid_size / (block_per_SM * SMs))
+                                          |
+                                     Priority
+                                     (traffic + 1) * num_wave
+                                          |
+                                     Expand reduce axis if smem budget allows
+                                          |
+                                     Assign block size / thread or warp tile
+                                          |                 
+                                     Emit Hint
+```
+
+The score makes two tradeoffs visible:
+
+- Smaller tiles often reduce per-CTA shared/register pressure and improve
+  occupancy, but they increase `grid_size` and may produce more waves.
+- Larger tiles can reduce global-memory traffic through reuse, but they are
+  rejected or penalized when shared memory/register pressure lowers residency.
 
 ```py
 # tilelang/carver/roller/policy/default.py
@@ -278,6 +401,66 @@ else:
     else:
         self.use_async_copy = False
 ```
+
+For tensor-core GEMM, the recommender additionally has to keep the macro tile
+compatible with intrinsic fragments:
+
+```text
+Output tile [block_M, block_N]
++-----------------------------------------------+
+| CTA computes one C tile                       |
+|                                               |
+|  +--------------+--------------+-----------+  |
+|  | warp tile    | warp tile    | ...       |  |
+|  | [warp_M,N]   | [warp_M,N]   |           |  |
+|  +--------------+--------------+-----------+  |
+|  | warp tile    | warp tile    | ...       |  |
+|  +--------------+--------------+-----------+  |
+|                                               |
+| Each warp tile is an integer multiple of      |
+| the selected MMA/WGMMA/TCGEN intrinsic shape. |
++-----------------------------------------------+
+
+Reduction slice [block_K]
++--------------------+      +--------------------+
+| A_shared BM x BK   |  x   | B_shared BN x BK   |
+| staged per pipe    |      | staged per pipe    |
++--------------------+      +--------------------+
+
+Pipeline depth multiplies the live shared-memory footprint.
+```
+
+For `FlashAttentionTemplate`, Carver is not looking at the final online-softmax
+kernel body directly. The template represents the core compute as a small graph
+of two tensorized matmuls and connects their nodes:
+
+```text
+Q: [B*H, S_q, D]  ----+
+                      |
+               +-------------+
+K: [B*H,       | MMA0: QK^T  |
+   S_kv, D] -->| space:      |
+               | [B*H,S_q,   |
+               |  S_kv]      |
+               | reduce: D   |
+               +-------------+
+                      |
+                      | edge: score tile shape
+               +-------------+
+V: [B*H,       | MMA1:       |
+   S_kv, D] -->| Score * V   |
+               | space:      |
+               | [B*H,S_q,D] |
+               | reduce:     |
+               | S_kv        |
+               +-------------+
+                      |
+               O: [B*H, S_q, D]
+```
+
+That graph lets `DefaultPolicy`/`TensorCorePolicy` compute tile propagation,
+temporary storage lifetime, and traffic across both matmul nodes instead of
+ranking each matmul independently.
 
 From my understanding, in order for tile recommendation (auto tuning) to benefit my kernel development, I need to implement a custom template for the kernel as well, or reuse the existing public template.
 
@@ -344,6 +527,84 @@ receive `attr::kParallelLoopLayout` plus an optional predicate
 (`src/transform/lower_tile_op.cc:40`, `src/transform/lower_tile_op.cc:1009`,
 `src/transform/lower_tile_op.cc:1178`, `src/transform/lower_tile_op.cc:1281`).
 
+### Inference Graph Shape
+
+`LayoutInference` constructs the graph implicitly while visiting the TIR body.
+The nodes are inferable operations, and the edges are fragment buffers used by
+multiple operations. Aliased buffers that share the same `data` `Var` are tied
+together so a layout inferred for one view can be propagated to sibling views.
+
+```text
+BufferUseDefCollector
+
+Tile op / Parallel loop #0
+        |
+        | fragment buffer A_local
+        v
+Tile op / Parallel loop #1
+        |
+        | fragment buffer C_local
+        v
+Tile op / Parallel loop #2
+
+Derived indexes:
+
+fragment buffer A_local ----> use_list_[A_local] = [0, 1]
+fragment buffer C_local ----> use_list_[C_local] = [1, 2]
+alias buffer view ----------> buffer_data_to_buffers_[var]
+
+alias buffer view shares the same data Var as C_local, so layout updates can
+propagate between the two views when their shapes are compatible.
+```
+
+The `infer_list_` ordering is the pass's worklist universe. When a buffer gets a
+new layout, every operation in `use_list_[buffer]` becomes eligible to run
+`InferLayout` again, because its local constraints may now be solvable.
+
+```text
+Start
+  |
+  v
+Seed layouts
+  - explicit annotations
+  - floating fully replicated fragments
+  |
+  v
+Strict inference
+  - run each op once at kStrict
+  - record strict_layout_map
+  |
+  v
+Common inference
+  - BFS from newly inferred buffers
+  - propagate through use_list_
+  |
+  v
+Free inference
+  - build connected components
+  - try each op as root
+  - choose the plan with minimum fragment registers
+  |
+  v
+Annotate IR
+  - attach kLayoutMap to blocks
+  - attach kParallelLoopLayout to loops
+  |
+  v
+LowerTileOp
+```
+
+At a high level, the three inference levels answer different questions:
+
+```text
+Level     Main question                         Typical source of constraints
+-------   ------------------------------------  --------------------------------
+Strict    What layout must this op use?          GEMM/MMA shared/register layout
+Common    What layout follows from neighbors?    copy/parallel/reduce propagation
+Free      What layout is legal and cheapest?     synthesized loop partitions,
+                                                minimum fragment register count
+```
+
 There are three sub-category of layout inference, according to TileLang's paper:
 
 ### Strict Layout Inference
@@ -358,6 +619,34 @@ and TCGEN05 choose full/half/quarter bank swizzles or linear layouts from the co
 
 For shared layouts, CUDA MMA may preserve an existing shared layout to avoid conflicts, while WGMMA/TCGEN05 always set strict shared layouts (`src/op/gemm.cc:237`, `src/backend/cuda/op/gemm.cc:305`). This is the concrete
 implementation of "operator-specific constraints" for tensor-core primitives.
+
+The strict phase is where hardware instructions constrain otherwise abstract
+fragment buffers:
+
+```text
+Inputs to strict GEMM inference:
+
+target + block_size
+MMA / WGMMA / TCGEN05
+        |
+        v
+tl.gemm.infer_layout
+        |
+        +--> shared operand layout for A
+        |    swizzle or existing layout
+        |          |
+        |          v
+        |      A_shared ----+
+        |                   |
+        +--> shared operand layout for B
+        |    swizzle or existing layout
+        |          |
+        |          v
+        |      B_shared ----+--> tl.gemm --> C_local
+        |                                      ^
+        +--> accumulator fragment layout       |
+             mma store/load layout -----------+
+```
 
 ```cpp
 // src/op/gemm.cc
@@ -378,6 +667,25 @@ LayoutMap GemmNode::InferLayout(const LayoutInferArgs &T,
 ### Common Layout Inference
 The paper define the layout inference process as a "constrained propagation algorithm", and common inference is the BFS propagation phase. When an inferred layout is added for a buffer, all tile ops that use that buffer are enqueued (`src/transform/layout_inference.cc:296`). `ParallelOpNode::InferLayout` tries to derive the loop layout from an already-layouted source fragment, preferring non-replicated writes/reads and honoring explicit loop annotations (`src/op/parallel.cc:357`, `src/op/parallel.cc:397`). It then completes layouts for other touched buffers from that loop layout (`src/op/parallel.cc:490`).
 
+```text
+InferLayout(op)
+        |
+        | returns {buffer: layout}
+layout_map
+        |
+        | propagate aliases sharing the same data Var
+use_list_
+        |
+        | find ops that touch the newly layouted buffer
+BFS queue
+        |
+        | enqueue dependent op ids
+InferLayout(dependent op)
+        |
+        | rerun at kCommon with a richer layout_map
+...
+```
+
 ```cpp
 // src/transform/layout_inference.cc
 // Push back into BFS queue
@@ -393,6 +701,18 @@ for (int idx : use_list_[buffer]) {
 ```
 
 Reduction is a good example of structurally aligned propagation. `ReduceOp` does not infer in strict mode, but in common/free mode it derives the destination fragment layout from the source fragment by removing the reduced dimension and folding it into replication (`src/op/reduce.cc:169`, `src/op/reduce.cc:233`).
+
+```text
+Source fragment layout over [M, N, K]
+        reduce over K
+              |
+              v
+Destination fragment layout over [M, N]
+
+The removed K dimension is not discarded entirely: its work is folded into
+replication so the destination layout still describes which threads own the
+post-reduction values.
+```
 
 ### Free Layout Inference
 
@@ -432,3 +752,39 @@ if (reg_num < min_reg_num ||
 
 Inside `ParallelOpNode`, free mode can synthesize a layout via `ComputePlanCandidate`/loop partitioning when no source layout exists, and it chooses between buffer-derived and plan-derived candidates
 (`src/op/parallel.cc:413`).
+
+The free phase is deliberately last because it is the most permissive. It
+handles a connected component only after strict and common propagation fail to
+settle every fragment layout:
+
+```text
+Unresolved connected component
+ops connected by fragment buffers
+        |
+Pick attempt root
+        |
+Run root InferLayout at kFree
+        |
+BFS propagate kFree updates
+        |
+All component buffers resolved?
+        |
+        +-- no  --> Try another root
+        |             |
+        |        Pick attempt root
+        |
+        +-- yes --> Normalize layouts and count registers
+                    |
+               Lowest register count?
+                    |
+                    +-- no  --> Try another root
+                    |
+                    +-- yes --> Keep as best plan
+                                  |
+                           Commit best layout_map updates
+```
+
+This explains why free inference can recover from underconstrained user code
+without silently choosing the first legal mapping it finds: each successful root
+attempt is scored by the total output shape of fragment layouts, which is used
+as a proxy for register pressure.
