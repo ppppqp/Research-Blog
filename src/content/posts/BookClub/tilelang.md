@@ -185,7 +185,7 @@ Next let's deep dive a bit to those two core contribution of TileLang:
 
 In short, tile recommendation models each operation to optimize the memory and computation placement (or in other words, optimize based on roofline model).
 
-> $$Time = \max_{i,j}(\dfrac{MemoryTraffic_i}{Bandwidth_i}, \dfrac{Computation_j}{Performance_j}) + t_{intrinsic} $$
+$$Time = \max_{i,j}(\dfrac{MemoryTraffic_i}{Bandwidth_i}, \dfrac{Computation_j}{Performance_j}) + t_{intrinsic} $$
 > where i indexes memory hierarchy levels (e.g., HBM, L2, L1), j indexes compute unit types (e.g. tensor cores, CUDA cores, SFUs), and $t_{intrinsic}$ accounts for inherent overheads such as kernel launch latency and loop prologue/epilogue costs.
 
 
