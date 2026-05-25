@@ -10,5 +10,5 @@ Currently working on:
 
 ## What you'll find here
 
-- **TIL** — short notes on things I learned that day
-
+- [**TIL**](/tags/til/) — short notes on things I learned that day
+- [**Book Club**](/tags/book-club/) - paper reading with code
