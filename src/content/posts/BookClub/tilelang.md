@@ -238,19 +238,19 @@ LowerAndLegalize + OptimizeForTarget
 For a plain GEMM, the data carried by a winning `Hint` maps almost one-to-one to
 kernel meta-parameters:
 
-```text
-Carver Hint                  TileLang kernel parameter/use
---------------------------   ---------------------------------------------
-hint.block = [BM, BN]        block_M, block_N, output tile per CTA
-hint.rstep = [BK]            block_K, reduction slice loaded per pipeline step
-hint.warp = [WM, WN]         tensor-core warp tile shape, used to derive threads
-hint.thread = [...]          CUDA-core thread partition when not using TC
-hint.pipeline_stage          T.Pipelined(..., num_stages=...)
-hint.use_async               async-copy pipeline preference
-hint.rasterization_plan      optional blockIdx remapping for L2 locality
-hint.cached_tensors          tensors expected to reside in shared memory
-hint.pass_context            lowering knobs such as static shared merge
-```
+
+
+Carver Hint              |    TileLang kernel parameter/use
+--|--
+hint.block = [BM, BN]   |     block_M, block_N, output tile per CTA
+hint.rstep = [BK]       |    block_K, reduction slice loaded per pipeline step
+hint.warp = [WM, WN]     |    tensor-core warp tile shape, used to derive threads
+hint.thread = [...]       |   CUDA-core thread partition when not using TC
+hint.pipeline_stage        |  T.Pipelined(..., num_stages=...)
+hint.use_async            |   async-copy pipeline preference
+hint.rasterization_plan    |  optional blockIdx remapping for L2 locality
+hint.cached_tensors        |  tensors expected to reside in shared memory
+hint.pass_context          |  lowering knobs such as static shared merge
 
 The important boundary is that Carver does not rewrite the user's kernel by
 itself. It recommends static parameters; the benchmark/autotune code then
