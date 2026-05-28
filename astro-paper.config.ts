@@ -2,12 +2,12 @@ import { defineAstroPaperConfig } from "./src/types/config";
 
 export default defineAstroPaperConfig({
   site: {
-    url: "https://astro-paper.pages.dev/",
+    url: "https://retepy.com/",
     title: "Retep's",
     description: "Learning notes on systems, GPUs, and low-level programming.",
     author: "Retep",
     profile: "https://github.com/ppppqp",
-    ogImage: "default-og.jpg",
+    ogImage: "cuda.webp",
     lang: "en",
     timezone: "Asia/Bangkok",
     dir: "ltr",
@@ -19,7 +19,7 @@ export default defineAstroPaperConfig({
   },
   features: {
     lightAndDarkMode: true,
-    dynamicOgImage: true,
+    dynamicOgImage: false,
     showArchives: true,
     showBackButton: true,
     editPost: {

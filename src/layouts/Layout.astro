@@ -24,6 +24,18 @@ const {
 } = Astro.props;
 
 const socialImageURL = new URL(ogImage, Astro.site ?? Astro.url);
+const xProfile = config.socials.find(social => social.name === "x")?.url;
+let xHandle: string | undefined;
+
+if (xProfile) {
+  try {
+    const username = new URL(xProfile).pathname.replace(/^\/|\/$/g, "");
+    xHandle = username ? `@${username}` : undefined;
+  } catch {
+    xHandle = undefined;
+  }
+}
+
 const rssHref = getRelativeLocaleUrl(
   Astro.currentLocale ?? config.site.lang,
   "rss.xml"
@@ -66,11 +78,12 @@ const rssHref = getRelativeLocaleUrl(
     <meta property="og:image" content={socialImageURL} />
 
     <!-- Twitter / X -->
-    <meta property="twitter:card" content="summary_large_image" />
-    <meta property="twitter:url" content={canonicalURL} />
-    <meta property="twitter:title" content={title} />
-    <meta property="twitter:description" content={description} />
-    <meta property="twitter:image" content={socialImageURL} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:url" content={canonicalURL} />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={socialImageURL} />
+    {xHandle && <meta name="twitter:site" content={xHandle} />}
 
     <!-- RSS autodiscovery -->
     <link

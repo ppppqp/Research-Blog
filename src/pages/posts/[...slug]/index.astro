@@ -7,6 +7,7 @@ import Datetime from "@/components/Datetime.astro";
 import Tag from "@/components/Tag.astro";
 import { getPostSlug, getPostUrl } from "@/utils/getPostPaths";
 import { getSortedPosts } from "@/utils/getSortedPosts";
+import { resolveDefaultOgImagePath } from "@/utils/resolveDefaultOgImagePath";
 import { slugifyStr } from "@/utils/slugify";
 import EditPost from "./_components/EditPost.astro";
 import ShareLinks from "./_components/ShareLinks.astro";
@@ -86,6 +87,10 @@ if (!ogImageUrl && config.features.dynamicOgImage) {
     ""
   );
   ogImageUrl = `${postUrl}/index.png`;
+}
+
+if (!ogImageUrl) {
+  ogImageUrl = resolveDefaultOgImagePath(config);
 }
 
 const ogImage = ogImageUrl
