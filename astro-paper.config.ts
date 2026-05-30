@@ -7,7 +7,7 @@ export default defineAstroPaperConfig({
     description: "Learning notes on systems, GPUs, and low-level programming.",
     author: "Retep",
     profile: "https://github.com/ppppqp",
-    ogImage: "cuda.webp",
+    ogImage: "cuda-og.webp",
     lang: "en",
     timezone: "Asia/Bangkok",
     dir: "ltr",
