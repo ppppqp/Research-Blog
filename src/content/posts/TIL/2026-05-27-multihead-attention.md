@@ -6,6 +6,7 @@ featured: false
 draft: false
 tags:
   - TIL
+  - Triton
 description: ""
 ---
 
@@ -700,4 +701,3 @@ For common small head dimensions like 32, 64, or 128, this is a reasonable menta
 - `acc`: `N_BLOCK x N_BLOCK`
 - `weights`: `N_BLOCK x N_BLOCK`
 - `out_acc`: `N_BLOCK x HEAD_DIM`
-

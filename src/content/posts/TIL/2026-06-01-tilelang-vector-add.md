@@ -5,7 +5,8 @@ title: "[TIL] Tilelang Element-wise Op & Vectorization"
 featured: false
 draft: false
 tags:
-    - TIL
+  - TIL
+  - TileLang
 description: "Notes on three TileLang vector-add kernels, how vectorization appears in IR/CUDA/PTX, and why one-element-per-thread leaves bandwidth on the table."
 ---
 
