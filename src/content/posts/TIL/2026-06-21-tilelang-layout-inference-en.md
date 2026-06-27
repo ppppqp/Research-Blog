@@ -1,6 +1,6 @@
 ---
 author: Retep
-pubDatetime: 2026-06-20T12:50:00.000-07:00
+pubDatetime: 2026-06-26T12:50:00.000-07:00
 title: "How to Write Layout Correctly: A Deep Dive into TileLang Layout Inference"
 featured: false
 draft: false
