@@ -858,48 +858,9 @@ bool ProveFragmentContains(Fragment small_frag, Fragment large_frag,
   // ...
 ```
 
-`small_frag`表示目标fragment的layout，`large_frag`表示已经存在的fragment的layout。
+`small_frag`表示目标fragment的layout，`large_frag`表示已经存在的fragment的layout。函数首先有一个特殊情况：如果large fragment是fully replicated，每个thread都有一份合法拷贝，那么containment显然为真。
 
-```text
-small_frag = candidate loop layout
-large_frag = existing buffer fragment layout
-
-small_frag_indices = loop variables
-large_frag_indices = buffer access indices
-```
-
-对于简单read：
-
-```py
-for i, j in T.Parallel(4, 16):
-    x = frag[i, j]
-```
-
-有：
-
-```text
-small_frag_indices = (i, j)
-large_frag_indices = (i, j)
-```
-
-对于一个投影read：
-
-```py
-for group, row_in_group in T.Parallel(2, 2):
-    row = group * 2 + row_in_group
-    x = frag[row, 0]
-```
-
-有：
-
-```text
-small_frag_indices = (group, row_in_group)
-large_frag_indices = (group * 2 + row_in_group, 0)
-```
-
-函数首先有一个特殊情况：如果large fragment是fully replicated，那么containment显然为真。如果每个thread都有一份合法拷贝，那么任意candidate thread都能读它。
-
-当`check_forward_index`为true时，还会检查两个layout是否使用相同的物理local index：
+当`check_forward_index`为true时，还会检查两个layout是否使用相同的物理local index。
 
 ```cpp
 if (check_forward_index) {
@@ -917,10 +878,8 @@ if (check_forward_index) {
 }
 ```
 
-在许多`ParallelOpNode`调用中，`check_forward_index`是false，所以证明重点在thread ownership。但这个可选检查在需要local-slot相等的路径上很重要。Thread相等只能说明“正确的thread触碰了元素”；forward-index相等则说明“正确的local register slot也被触碰了”。
 
 接着，函数为small fragment引入一个符号replicate变量：
-
 ```cpp
 Var rep_small("__checking_frag_contains_rep");
 analyzer.Bind(rep_small,
@@ -932,34 +891,6 @@ auto thread = small_frag->ForwardThread(small_frag_indices, rep_small);
 
 这表示：对于candidate layout的任意合法replica，计算执行这次access的thread。
 
-例如，如果：
-
-```text
-candidate loop layout:
-  thread = i * 16 + j
-  replicate = 1
-```
-
-那么：
-
-```text
-thread = i * 16 + j
-```
-
-如果：
-
-```text
-candidate loop layout:
-  thread = rep * 32 + i
-  replicate = 2
-```
-
-那么：
-
-```text
-thread = rep_small * 32 + i
-```
-
 下一步，函数会问large fragment：“如果我使用large fragment的物理local index，再加上small fragment的thread，那么这个物理坐标对应large fragment中的哪个逻辑元素？”
 
 ```cpp
@@ -968,13 +899,6 @@ large_frag_physical_and_thread.push_back(thread);
 auto inv_large_frag = large_frag->Inverse();
 auto inv_large_frag_logical_and_rep =
     inv_large_frag->Forward(large_frag_physical_and_thread);
-```
-
-一个`Fragment` layout有两个物理分量：
-
-```text
-forward_index  -> local index inside the thread
-forward_thread -> owning thread
 ```
 
 `large_frag->Forward(large_frag_indices)`给出local index，结合推理出的thread，形成物理坐标`(large local index, candidate thread)`。Large fragment的inverse会把这个物理坐标映射回`(large logical indices, large replica)`。最后一个元素就是恢复出的replica。
@@ -1058,52 +982,30 @@ if (access.is_write &&
 }
 ```
 
-这里使用两个方向的containment check，实际上要求owner-thread完全兼容。Write比read更危险：如果loop layout允许额外physical lanes，或者映射到不同local slot，我们就可能覆盖错误的fragment element。
+这里使用两个方向的containment check，实际上要求owner-thread完全兼容，即所有被访问元素的ownership相等。Read只需要单向containment，因为loop只需要证明它所读取的值在执行它的thread上可用。Write需要相等，因为write会更新buffer layout的物理状态。
 
-两个方向分别表示：
-
+例如，在`for i, j in T.Parallel(2, 2):`中，假设buffer layout是
 ```text
-ProveFragmentContains(fragment, candidate, ...)
-  Every existing buffer owner is covered by the candidate loop layout.
-
-ProveFragmentContains(candidate, fragment, ...)
-  Every candidate loop owner is valid for the existing buffer layout.
+forward_thread(i, j) = i * 2 + j
+forward_index(i, j) = 0
+```
+candidate layout 是
+```text
+forward_thread(i, j) = i
+forward_index(i, j) = j
 ```
 
-二者一起近似要求被访问元素的ownership相等。Read只需要单向containment，因为loop只需要证明它所读取的值在执行它的thread上可用。Write需要相等，因为write会更新buffer layout的物理状态。
 
-例如，假设buffer layout是
 
-```text
-frag[i, j] -> thread = i * 16 + j, local = 0
-```
+Candidate layout可能覆盖相同的逻辑shape（比如thread0 和thread1想要读取的时候，总是可以读取），但由于把每个元素存到了不同的物理thread/local slot，所以会存在读写不一致性，应该被拒绝。
 
-那么对`frag`写入的循环应该使用同样的ownership规则。一个类似下面的candidate：
 
-```text
-thread = i
-local  = j
-```
 
-可能覆盖相同的逻辑shape，但它把每个元素存到了不同的物理thread/local slot。这不是同一个fragment layout，所以对于write会被拒绝。
 
 ## 常见失败案例
 
-总结一下以上我们提到的三种不同layout inference失败模式。第一种失败模式是非单射layout：
+总结一下以上我们提到的三种不同layout inference失败模式。第一种失败模式是非单射layout，即对于两个不同的元素`x`, `y`，有`forward_thread(x) == forward_thread(y)`且`forward_index(x) == forward_index(y)`。
 
-```text
-logical element A -> physical slot X
-logical element B -> physical slot X
-```
-
-例如：
-
-```text
-fragment[i, j] -> thread = i
-                  local  = 0
-```
-
-对于shape `(4, 16)`，同一行的16个值全部映射到同一个`(thread, local)`对。这是真正的collision。`DetectInjective`应该拒绝它。
 
 第二种模式是ownership不兼容。candidate本身可能是单射的，但它并没有从拥有该值的thread访问fragment。`ValidateCandidateAgainstFragments`和`ProveFragmentContains`就是用来捕获这种情况。
 
@@ -1112,7 +1014,7 @@ fragment[i, j] -> thread = i
 ```text
 (group, row_in_group) -> thread = group * 32 + row_in_group * 16
 ```
-这会将四个逻辑元素映射到thread `{0, 16, 32, 48}`。没有collision，所以它是单射的。然而lowering需要对thread表达式求逆。这个inverse需要额外的整除guard，比如`thread % 16 == 0`。当前lowering路径会经过TVM的affine inverse machinery，而某些稀疏的single-component表达式无法在那里表示。这就是`abs(source->scale) == 1`断言背后的失败模式。
+这会将四个逻辑元素映射到thread `{0, 16, 32, 48}`。没有collision，所以它是单射的。然而lowering需要对thread表达式求逆。这个inverse需要额外的整除guard，比如`thread % 16 == 0`。当前lowering路径会经过TVM的affine inverse machinery，而某些稀疏的single-component表达式无法在那里表示。这就是本文开篇提到的`abs(source->scale) == 1`断言背后的失败模式。
 
 # 举个例子
 
@@ -1169,85 +1071,22 @@ for row, col in T.Parallel(4, 16):
 
 在layout inference开始时，`fragment`没有已知layout。在strict mode下，因为fragment access不是常数索引，所以这个loop无法推导出fully replicated layout。在common mode下，仍然没有已知source layout可以传播。在free mode下，会使用`ComputePlanCandidate`。
 
-这个loop有：
+这个loop有的总迭代次数是`64`，刚好是`threads`的总数，所以进过上述的代数推导，得到了第一个loop的fragment layout：
+- `forward_thread(row_col) = row * 16 + col`
+- `forward_index(row, col) = 0`
 
-```text
-loop_total_size = 4 * 16 = 64
-threads         = 64
-```
-
-所以自然的plan是：
-
-```text
-flat(row, col) = row * 16 + col
-thread         = flat(row, col)
-local_index    = 0
-```
-
-因此，第一个loop建立了fragment layout：
-
-```text
-fragment[row, col] -> thread = row * 16 + col
-                      local  = 0
-```
 
 这个update会返回给BFS driver。driver将它存入`layout_map`，然后通过`use_list_`重新入队使用`fragment`的operation。这就是第二个loop如何在已有信息下获得第二次推导机会。
 
-第二个loop只读取第0列：
+推导第二个loop时，`fragment`已经有已知layout，所以`ComputeLoopLayoutFromBuffer`可以运行。它会将access indices替换进source fragment的thread表达式。带入`row = group * 2 + row_in_group`和，`col = 0`得到：
+- `forward_thread(group, row_in_group) = group * 32 + row_in_group * 16`
 
-```py
-for group, row_in_group in T.Parallel(2, 2):
-    row = group * 2 + row_in_group
-    B[row] = fragment[row, 0]
-```
-
-现在`fragment`已经有已知layout，所以`ComputeLoopLayoutFromBuffer`可以运行。它会将access indices替换进source fragment的thread表达式：
-
+四个逻辑iteration分别映射到thread 0, thread 16, thread 32, thread 48。问题是，**这个layout是稀疏的**。从数学角度看，这个映射仍然是单射：没有两个逻辑iteration映射到同一个物理位置。然而，当前inverse-lowering路径很难表示它。Lowering需要从物理thread坐标反推出逻辑loop变量，但推导过程需要整除约束：
 ```text
-source forward_thread:
-  thread = row * 16 + col
-
-access:
-  row = group * 2 + row_in_group
-  col = 0
-
-substitution:
-  thread = (group * 2 + row_in_group) * 16 + 0
-         = group * 32 + row_in_group * 16
-```
-
-所以第二个loop推导出的loop layout是：
-
-```text
-(group, row_in_group) -> thread = group * 32 + row_in_group * 16
-```
-
-四个逻辑iteration映射到：
-
-```text
-(0, 0) -> thread 0
-(0, 1) -> thread 16
-(1, 0) -> thread 32
-(1, 1) -> thread 48
-```
-
-这是关键点：这个layout是稀疏的。它在64-thread block中只使用thread `{0, 16, 32, 48}`。
-
-从数学角度看，这个映射仍然是单射：没有两个逻辑iteration映射到同一个物理位置。然而，当前inverse-lowering路径很难表示它。Lowering需要从物理thread坐标反推出逻辑loop变量：
-
-```text
-thread = group * 32 + row_in_group * 16
-```
-
-这个inverse需要整除约束：
-
-```text
-thread must be divisible by 16
 group = thread / 32
 row_in_group = (thread % 32) / 16
 ```
-
-但当前路径会走TVM的affine inverse machinery，而这个稀疏single-component map可能会产生一个source scale不是`1`或`-1`的`IterSplitExpr`。这就是失败来源：
+当前路径会走TVM的affine inverse machinery，而这个稀疏single-component map可能会产生一个source scale不是`1`或`-1`的`IterSplitExpr`。这就是失败来源：
 
 ```text
 TVM_FFI_ICHECK(analyzer_->CanProveEqual(abs(source->scale), 1));
@@ -1261,14 +1100,7 @@ TVM_FFI_ICHECK(analyzer_->CanProveEqual(abs(source->scale), 1));
 - 改变loop结构，让被投影掉的dimension成为local index的一部分，而不是thread index的一部分。
 - 改变`BLOCK`或`threads`，让传播出的layout对当前inverse machinery来说恰好dense。（这个就有点玄学和碰运气了）
 
-下面是一个具体的annotation版本。与其让第一个loop选择：
-
-```text
-thread = row * 16 + col
-local  = 0
-```
-
-我们可以定义一个layout，把`col`放到thread轴，把`row`放到local轴：
+下面是一个具体的annotation版本。我们可以定义一个layout，把`col`放到thread轴，把`row`放到local轴：
 
 ```py
 def source_layout(row, col):
@@ -1278,15 +1110,7 @@ T.annotate_layout({
     fragment: T.Fragment((4, 16), forward_fn=source_layout)
 })
 ```
-
-这个source fragment layout表示：
-
-```text
-fragment[row, col] -> thread = col
-                      local  = row
-```
-
-那么读取`fragment[row, 0]`会得到：
+于是`forward_thread(row, col) = col`。那么读取`fragment[row, 0]`会得到：
 
 ```text
 thread = 0
