@@ -3,7 +3,7 @@ author: Retep
 pubDatetime: 2026-06-20T12:50:00.000-07:00
 title: "如何正确地写Layout：TileLang Layout Inference深度解析"
 featured: false
-draft: false
+draft: true
 tags:
   - TileLang
 description: ""
