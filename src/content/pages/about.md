@@ -2,10 +2,12 @@
 title: "About"
 description: "About this blog."
 ---
-Spending my time learning and researching low level programming and compiler.
+I'm interested in parallel programming and compiler.
 
 Currently working on: 
-- Triton & Tilelang
+- [Triton](/tags/triton)
+- [TileLang](/tags/tilelang)
+- [MLIR](/tags/mlir)
 
 
 ## What you'll find here
