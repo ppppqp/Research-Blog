@@ -164,7 +164,7 @@ $$
 we use a small permutation:
 
 $$
-\text{physical offset} = \operatorname{swizzle}(\text{row}, \text{col})
+\text{physical offset} = \text{swizzle}(\text{row}, \text{col})
 $$
 
 The exact formula depends on the GPU instruction, the library, the data type,
@@ -188,7 +188,7 @@ The swizzle changes the local offset but keeps the group base:
 
 $$
 \text{physical offset}
-  = \text{group base} + \operatorname{permute}(\text{local offset})
+  = \text{group base} + \text{permute}(\text{local offset})
 $$
 
 Many swizzle layouts can be understood as XOR-ing some higher coordinate bits
@@ -370,7 +370,7 @@ With a swizzled layout, the same logical coordinate is mapped to a different
 physical offset:
 
 $$
-i_l' = \operatorname{swizzle}(i_l)
+i_l' = \text{swizzle}(i_l)
 $$
 
 The goal is not that \(i_l'\) is continuous. The goal is:
