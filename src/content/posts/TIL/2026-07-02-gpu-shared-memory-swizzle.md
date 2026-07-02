@@ -6,9 +6,7 @@ featured: false
 draft: false
 tags:
   - TIL
-  - GPU
-  - CUDA
-description: "Notes on shared-memory swizzling, bank conflicts, lanes, atoms, and why 64B/128B swizzle modes are about access patterns rather than making addresses contiguous."
+description: ""
 ---
 
 I used to vaguely understand swizzling as "some layout trick that makes GPU
@@ -197,14 +195,14 @@ Many swizzle layouts can be understood as XOR-ing some higher coordinate bits
 into lower address or bank bits. In a 2D explanation, it often looks like:
 
 $$
-\text{swizzled_col} = \text{col} \oplus f(\text{row})
+\text{swizzled col} = \text{col} \oplus f(\text{row})
 $$
 
 Then:
 
 $$
 \text{physical offset} =
-  \text{row} \cdot \text{stride} + \text{swizzled_col}
+  \text{row} \cdot \text{stride} + \text{swizzled col}
 $$
 
 This is not meant to preserve row-major order. It is meant to break the pattern
