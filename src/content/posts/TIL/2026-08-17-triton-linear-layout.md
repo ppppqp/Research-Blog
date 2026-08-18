@@ -285,27 +285,88 @@ pseudoinverse. See `LinearLayout::invertAndCompose` and its focused tests in
 
 ## From layout to LLVM IR
 
-TTGIR encodings are first normalized with `toLinearLayout`. Lowering then calls
-`applyLinearLayout` to emit the integer bit operations corresponding to `LinearLayout::apply`.
+The core function used for generating the LLVM IR is `applyLinearLayout`. Let's take a look:
+```cpp
+SmallVector<std::pair<StringAttr, Value>>
+applyLinearLayout(Location loc, RewriterBase &rewriter,
+                  const LinearLayout &layout,
+                  ArrayRef<std::pair<StringAttr, Value>> indices) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  // Notice that we assert dim names has the same order of indices, not only size equal
+  // this is because we will do concat later, and we need each dim to be aligned
+  assert(layout.getNumInDims() == indices.size());
+  assert(llvm::equal(layout.getInDimNames(), llvm::make_first_range(indices)));
+  // Trivial layout
+  if (layout.getNumOutDims() == 0) {
+    return {};
+  }
 
-The effects depend on the encoding:
+  // Manually constant-fold the layout where possible.
+  SmallVector<std::pair<StringAttr, int32_t>> constantIns;
+  SmallVector<std::pair<StringAttr, Value>> nonConstantIns;
 
-```text
-#blocked → thread/lane index arithmetic and global-memory addresses
-#shared  → swizzled shared-memory offsets
-#dot_op  → ldmatrix addresses and register fragments
-#mma     → per-lane MMA inputs and accumulator registers
+
+  /*
+    Here, we collect constant input and non-constant input (SSA value)
+    for example, (register=3, lane=%a, warp=%b)
+    constantIns = [("register", 3), ("lane", 0), ("warp", 0)]
+    nonConstantIns = [("lane", %a), ("warp", %b)]
+  */
+  for (auto [inDimName, idx] : indices) {
+    APInt constant;
+    if (matchPattern(idx, m_ConstantInt(&constant))) {
+      constantIns.push_back({inDimName, constant.getSExtValue()});
+    } else {
+      constantIns.push_back({inDimName, 0});
+      nonConstantIns.push_back({inDimName, idx});
+    }
+  }
+
+  // Compute constant part of the output and wrap it as values
+
+  /*
+    Here, we initialize output. 
+    For all constant inputs, apply the layout to fold the constant output
+  */
+  Value zero = b.i32_val(0);
+  SmallVector<std::pair<StringAttr, Value>> outIndices;
+  for (auto [outDimName, constant] : layout.apply(constantIns)) {
+    if (constant == 0)
+      outIndices.push_back({outDimName, zero});
+    else
+      outIndices.push_back({outDimName, b.i32_val(constant)});
+  }
+
+  if (nonConstantIns.size() == 0) {
+    return outIndices;
+  }
+
+
+  /*
+    Here, we compute the non-constant input.
+    Suppose nonConstantIns = [("lane", %a), ("warp", %b)]
+    we concat them together by x = %a | %b (using the first for loop)
+    then concat the corresponding non-const basis with layout.sublayout into matrix
+    Run matrixVectorProd for bitwise AND to produce (x & matrix)
+    Finally, use xor to generate the final output for that dim
+  */
+  SmallVector<StringAttr> inDimNames;
+  // Concatenate input
+  Value x = b.i32_val(0);
+  int shift = 0;
+  for (auto [inDimName, idx] : nonConstantIns) {
+    inDimNames.push_back(inDimName);
+    x = b.or_(x, b.shl(idx, b.i32_val(shift)));
+    shift += layout.getInDimSizeLog2(inDimName);
+  }
+
+  for (auto &[outDimName, outIdx] : outIndices) {
+    // Apply flattened sublayout for this output
+    auto matrix = layout.sublayout(inDimNames, outDimName).flattenIns();
+    auto out = triton::gpu::matrixVectorProd(b, matrix, x);
+    outIdx = b.xor_(outIdx, out);
+  }
+
+  return outIndices;
+}
 ```
-
-For `ttg.convert_layout`, source and destination encodings become two
-`LinearLayout`s. Their relationship determines the implementation:
-
-```text
-same-thread ownership → reorder registers
-different lanes       → warp shuffles
-different warps       → shared-memory exchange and barriers
-```
-
-The layouts themselves do not survive as LLVM metadata. They are compiled into
-per-thread struct types, index arithmetic, register permutations, shared-memory
-addresses, shuffles, `ldmatrix`, and MMA instructions.
