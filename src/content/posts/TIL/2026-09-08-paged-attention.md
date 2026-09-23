@@ -1,6 +1,6 @@
 ---
 author: Retep
-pubDatetime: 2026-09-08T12:00:00.000-07:00
+pubDatetime: 2026-09-23T12:00:00.000-07:00
 title: "[TIL] Optimizing paged attention"
 featured: false
 draft: false
