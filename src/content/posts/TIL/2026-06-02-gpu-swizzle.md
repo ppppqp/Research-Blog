@@ -1,6 +1,6 @@
 ---
 author: Retep
-pubDatetime: 2026-07-02T12:00:00.000-07:00
+pubDatetime: 2026-06-02T12:00:00.000-07:00
 title: "[TIL] GPU Shared Memory Swizzle"
 featured: false
 draft: false
