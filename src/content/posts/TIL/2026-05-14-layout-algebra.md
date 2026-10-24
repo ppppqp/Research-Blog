@@ -1,6 +1,6 @@
 ---
 author: Retep
-pubDatetime: 2026-07-14T12:00:00.000-07:00
+pubDatetime: 2026-05-14T12:00:00.000-07:00
 title: "[TIL] A small note on layout computation"
 featured: false
 draft: false
