@@ -8,7 +8,6 @@ tags:
   - TIL
 description: ""
 ---
-# How IREE Builds a Dispatch: Choose an Anchor, Grow a Group, Define Its Boundary
 
 IREE's dispatch-creation stage partitions tensor computations into units that
 later stages can compile and schedule independently. The interesting part is deciding where its boundary should go: which computations belong together, which values should cross that boundary, and which producers should be copied into more than one dispatch.
