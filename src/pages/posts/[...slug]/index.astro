@@ -224,6 +224,8 @@ const ogImage = ogImageUrl
     const codeBlocks = Array.from(document.querySelectorAll("pre"));
 
     for (const codeBlock of codeBlocks) {
+      if (codeBlock.querySelector("code.language-mermaid")) continue;
+
       const wrapper = document.createElement("div");
       wrapper.style.position = "relative";
 

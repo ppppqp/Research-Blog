@@ -36,8 +36,15 @@ export default defineConfig({
     },
   },
   markdown: {
-    remarkPlugins: [remarkMath,
-      remarkToc, [remarkCollapse, { test: "Table of contents" }]],
+    syntaxHighlight: {
+      type: "shiki",
+      excludeLangs: ["mermaid"],
+    },
+    remarkPlugins: [
+      remarkMath,
+      remarkToc,
+      [remarkCollapse, { test: "Table of contents" }],
+    ],
     rehypePlugins: [rehypeKatex],
     shikiConfig: {
       themes: { light: "min-light", dark: "night-owl" },

@@ -1,7 +1,6 @@
 @plugin "@tailwindcss/typography";
 
 @layer base {
-
   /* ===== Override default Tailwind Typography styles ===== */
   .app-prose {
     @apply prose;
@@ -53,7 +52,6 @@
     }
 
     table {
-
       th,
       td {
         @apply border-border border p-2;
@@ -120,5 +118,42 @@
 
   .prose .katex-display {
     @apply text-foreground;
+  }
+
+  .mermaid-diagram {
+    @apply border-border my-6 max-w-full overflow-x-auto rounded border p-4;
+
+    &:focus-visible {
+      @apply outline-accent outline-2 outline-offset-2;
+    }
+
+    svg {
+      display: block;
+      margin-inline: auto;
+      height: auto;
+      /* Keep labels readable and scroll wide diagrams on small screens. */
+      max-width: none !important;
+    }
+
+    pre {
+      @apply text-foreground m-0 bg-transparent p-0 whitespace-pre;
+    }
+
+    code {
+      @apply bg-transparent p-0;
+      overflow-wrap: normal;
+    }
+
+    .mermaid-error {
+      @apply text-foreground mt-0 mb-3 text-sm;
+    }
+  }
+
+  .mermaid-render-target {
+    position: absolute;
+    top: 0;
+    left: 0;
+    visibility: hidden;
+    pointer-events: none;
   }
 }

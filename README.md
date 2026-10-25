@@ -124,6 +124,26 @@ pnpm install
 pnpm dev
 ```
 
+## Mermaid diagrams
+
+Use a fenced `mermaid` code block in any Markdown or MDX page:
+
+````markdown
+```mermaid
+flowchart LR
+  A[Write Markdown] --> B[Build with Astro]
+  B --> C[Read the blog]
+```
+````
+
+Mermaid loads only when the current page contains a diagram. Diagrams follow the
+site's light/dark theme and render after client-side navigation. Wide diagrams
+scroll horizontally. If rendering fails or JavaScript is disabled, the source
+remains readable.
+
+For accessible diagrams, include Mermaid's `accTitle` and `accDescr` where the
+diagram type supports them. Diagram links and HTML labels are disabled.
+
 ## Google Site Verification (optional)
 
 You can add your [Google Site Verification HTML tag](https://support.google.com/webmasters/answer/9008080#meta_tag_verification&zippy=%2Chtml-tag) by setting `site.googleVerification` in `astro-paper.config.ts`:
