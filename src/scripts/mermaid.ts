@@ -48,9 +48,11 @@ function collectDiagrams(): HTMLElement[] {
   ).filter(container => diagrams.has(container));
 }
 
-function showSource(diagram: Diagram): void {
+function showSource(diagram: Diagram, error: unknown): void {
   diagram.output.replaceChildren();
   diagram.codeBlock.hidden = false;
+  const message = error instanceof Error ? error.message : String(error);
+  diagram.error.textContent = `Unable to render diagram: ${message}. Source is shown below.`;
   diagram.error.hidden = false;
 }
 
@@ -71,9 +73,9 @@ async function renderDiagrams(): Promise<void> {
     // Vite creates a separate chunk, fetched only on pages containing diagrams.
     mermaidPromise ??= import("mermaid").then(module => module.default);
     [mermaid] = await Promise.all([mermaidPromise, document.fonts.ready]);
-  } catch {
+  } catch (error) {
     mermaidPromise = undefined;
-    for (const container of unrendered) showSource(diagrams.get(container)!);
+    for (const container of unrendered) showSource(diagrams.get(container)!, error);
     return;
   }
 
@@ -116,9 +118,9 @@ async function renderDiagrams(): Promise<void> {
       diagram.codeBlock.hidden = true;
       diagram.error.hidden = true;
       diagram.theme = theme;
-    } catch {
+    } catch (error) {
       if (currentRevision !== revision || !container.isConnected) continue;
-      showSource(diagram);
+      showSource(diagram, error);
       diagram.theme = theme;
     } finally {
       target.remove();
