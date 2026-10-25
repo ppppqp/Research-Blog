@@ -1,6 +1,6 @@
 ---
 author: Retep
-pubDatetime: 2026-08-15T12:00:00.000-07:00
+pubDatetime: 2026-10-25T12:00:00.000-07:00
 title: "[TIL] IREE Dispatch Creation"
 featured: false
 draft: false
